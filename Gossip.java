@@ -6,42 +6,83 @@ import java.util.*;
 
 
 
-
 class GossipData implements Serializable{
     int number;
     int avg;
     int highVal;
     int lowVal;
     String info;
+    int from;
 }
 
 class GossipWorker extends Thread{
     GossipData gossip;
-    GossipWorker (GossipData g) {gossip = g;}
+    Node node;
+    GossipWorker (GossipData g, Node n) {
+        gossip = g;
+        node = n;
+    }
 
     public void run(){
         //run object
-        if(gossip.info.equals("Hello")){
-            ReturnPing(gossip);
+        if(gossip.info.equals("Hello") && gossip.number == node.port){
+            ReturnPing(gossip, node.port);
+        } else if(gossip.info.equals("Hello") && gossip.number != node.port) {
+            SendPing(gossip, node.port);
+        } else if(gossip.info.equals("Here") && node.issuedCmd.equals("p")){
+            ReceivePing(gossip, node);
         }
     }
 
-    private void ReturnPing(GossipData goss){
+    private void ReceivePing(GossipData gossip, Node node){
+        if(gossip.from < node.port){
+            node.previous.put("active", 1);
+        } else if(gossip.from > node.port) {
+            System.out.println("\nabove\n");
+            node.next.put("active", 1);
+        }
+    }
+
+    private void SendPing(GossipData goss, int currentPort){
+
         try{
-            System.out.println("Preparing datagram packet");
+            DatagramSocket dgSock = new DatagramSocket();
+            InetAddress IPAddress = InetAddress.getByName("localhost");
+
+            ByteArrayOutputStream outStream = new ByteArrayOutputStream();
+            ObjectOutputStream outObj = new ObjectOutputStream(outStream);
+
+            outObj.writeObject(goss);
+
+            byte[] data = outStream.toByteArray();
+            DatagramPacket send = new DatagramPacket(data, data.length, IPAddress, goss.number);
+            dgSock.send(send);
+            dgSock.close();
+        } catch(IOException io){
+            io.printStackTrace();
+        }
+
+    }
+
+    private void ReturnPing(GossipData goss, int currentPort){
+        try{
+            System.out.println("Preparing datagram packet, current Port is: " + currentPort);
+            System.out.println("gossip port is " + goss.from);
             DatagramSocket dgSock = new DatagramSocket();
             InetAddress IPAddress = InetAddress.getByName("localhost");
     
             GossipData gossipObj = new GossipData();
             gossipObj.info = "Here";
+            gossipObj.from = currentPort;
+            gossipObj.number = goss.from;
     
             ByteArrayOutputStream outStream = new ByteArrayOutputStream();
             ObjectOutputStream outObj = new ObjectOutputStream(outStream);
             outObj.writeObject(gossipObj);
             byte[] data = outStream.toByteArray();
-            DatagramPacket send = new DatagramPacket(data, data.length, IPAddress, goss.number);
+            DatagramPacket send = new DatagramPacket(data, data.length, IPAddress, gossipObj.number);
             dgSock.send(send);
-            System.out.println("Datagram has been sent");
+            System.out.println("Datagram has been  sent to port: " + gossipObj.number);
             dgSock.close();
         } catch(IOException io){
             io.printStackTrace();
@@ -57,11 +98,26 @@ class Node {
     int avg;
     int cycle;
     int port;
+    String issuedCmd;
+    HashMap<String, Integer> next = new HashMap<>();
+    HashMap<String, Integer> previous = new HashMap<>();
+
 
     public Node(String id){
         this.id = Integer.parseInt(id);
         this.data = SetData();
         this.port = SetPort(this.id);
+
+        this.next.put("port", 0);
+        this.next.put("active", 0);
+        this.previous.put("port", 0);
+        this.previous.put("active", 0);
+
+        int nextPort = (this.port == 48109) ? this.port = 48100 : this.port +1;
+        int prevPort = (this.port == 48100) ? this.port + 9 : this.port - 1;
+
+        this.next.put("port", nextPort);
+        this.previous.put("port", prevPort);
     }
 
     private int SetData(){
@@ -73,6 +129,7 @@ class Node {
         System.out.println("\n=====Available Commands=====");
         System.out.println("'t': Prints available commands");
         System.out.println("'l': Prints local Node values");
+        System.out.println("'p': 'Pings' neighboring ports to check for active nodes");
     }
 
     public void Locals(){
@@ -83,82 +140,6 @@ class Node {
         System.out.println("Total size:         " + this.size);
         System.out.println("Average Value:      " + this.avg);
         System.out.println("Current Cycle:      " + this.cycle);
-    }
-
-    public void Ping(){
-        /* 
-         * Checks for nodes above and below
-         * needs to return Node Numbers and display in console
-         */
-
-        int nextPort = (this.port == 48109) ? this.port = 48100 : this.port +1;
-        int prevPort = (this.port == 48100) ? this.port + 9 : this.port - 1;
-
-        if(NodeExists(nextPort, this.port)){
-            System.out.println("\n");
-        }
-        if(NodeExists(prevPort, this.port)){
-            System.out.println("\n");
-        }
-    }
-
-    private boolean NodeExists(int port, int prevPort){
-
-        boolean ctrl = true;
-
-        try{
-            System.out.println("Preparing datagram packet");
-            DatagramSocket dgSock = new DatagramSocket();
-            InetAddress IPAddress = InetAddress.getByName("localhost");
-
-            GossipData gossipObj = new GossipData();
-            gossipObj.info = "Hello";
-            gossipObj.number = prevPort;
-
-            ByteArrayOutputStream outStream = new ByteArrayOutputStream();
-            ObjectOutputStream outObj = new ObjectOutputStream(outStream);
-
-            outObj.writeObject(gossipObj);
-
-            byte[] data = outStream.toByteArray();
-            DatagramPacket send = new DatagramPacket(data, data.length, IPAddress, port);
-
-            dgSock.send(send);
-            System.out.println("Datagram has been sent");
-
-            byte[] inData = new byte[1024];
-            InetAddress IPAddr = InetAddress.getByName("localhost");
-            DatagramSocket dgsock = new DatagramSocket(port); //error here, Cannot create a new socket, need to have the same socket instance. Read this method, you can find what's wrong in here
-
-            while(ctrl){
-                DatagramPacket inPacket  = new DatagramPacket(inData, inData.length);
-                dgsock.receive(inPacket);;
-                byte[] storage = inPacket.getData();
-
-                ByteArrayInputStream in = new ByteArrayInputStream(storage);
-                ObjectInputStream inStream = new ObjectInputStream(in);
-
-                GossipData gObj = (GossipData) inStream.readObject();
-                if(gObj.info.indexOf("Here") > -1){
-                    System.out.println("\n We have a response \n");
-                    ctrl = false;
-                    dgsock.close();
-                    dgSock.close();
-                    return true;
-                }
-            }    
-        } catch(UnknownHostException uh){
-            System.out.println("\n  Unknown Host \n");
-            uh.printStackTrace();
-        }catch(SocketException s){
-            s.printStackTrace();
-        } catch(IOException io){
-            io.printStackTrace();
-        } catch(ClassNotFoundException cf){ // may have to write a different response
-            cf.printStackTrace();
-        }
-
-        return false;
     }
 
     private int SetPort(int id){
@@ -174,14 +155,16 @@ class Node {
 
     public static void main(String[] args) throws Exception{
         Node current = new Node(args[0]);
+
+
         System.out.println("Henry deBuchananne's Gossip Server 1.0 booting up, listening at port " + current.port + "\n");
         ConsoleLoop loop = new ConsoleLoop(current);
         Thread t = new Thread(loop);
         t.start();
         
-        boolean control = true;
+         boolean control = true;
 
-        try{
+         try{
             DatagramSocket dgsock = new DatagramSocket(current.port);
             //Datagram sockets are great, but we may need to watch out for buffer size
             //maybe change the object that we use? is there a buffered one we can use?
@@ -191,7 +174,7 @@ class Node {
 
             while(control){
                 DatagramPacket inPacket  = new DatagramPacket(inData, inData.length);
-                dgsock.receive(inPacket);;
+                dgsock.receive(inPacket);
                 byte[] data = inPacket.getData();
 
                 ByteArrayInputStream in = new ByteArrayInputStream(data);
@@ -204,10 +187,9 @@ class Node {
                         control = false;
                         dgsock.close();
                     } 
-                    
 
-                    System.out.println("\nSERVER: GossipObject recieved: " + gObj.info + "\n");
-                    new GossipWorker(gObj).start();
+                    new GossipWorker(gObj, current).start();
+                    
                 } catch (ClassNotFoundException e){
                     e.printStackTrace();
                 }
@@ -216,7 +198,7 @@ class Node {
             e.printStackTrace();
         } catch(IOException io){
             io.printStackTrace();
-        }
+        } 
     }
 }
 
@@ -232,56 +214,62 @@ class ConsoleLoop implements Runnable{
         BufferedReader read = new BufferedReader(new InputStreamReader(System.in));
         try{
             String str;
+            System.out.print("Enter 't' to list available commands, or (quit/stopserver): \n");
             do{
-                System.out.print("Enter a string to send to the server, or (quit/stopserver): ");
                 System.out.flush();
                 str = read.readLine();
 
-/*                 if(str.indexOf("quit") > -1){
-                    System.out.println("\n");
-                    System.exit(0); //find other way to do this
-                } */
                 switch(str){
                     case "quit":
+                        node.issuedCmd = "quit";
                         System.out.println("Exiting process per user request\n");
                         System.exit(0); //find other way to do this
                         break;
                     case "t":
+                        node.issuedCmd = "t";
                         node.Tell();
                         break;
                     case "l":
+                        node.issuedCmd = "l";
                         node.Locals();
                         break;
                     case "p":
-                        node.Ping();
+                        node.issuedCmd = "p";
+                        Ping(node);
                         break;
                 }
-                try{
-                    System.out.println("Preparing datagram packet");
-                    DatagramSocket dgSock = new DatagramSocket();
-                    InetAddress IPAddress = InetAddress.getByName("localhost");
-
-                    GossipData gossipObj = new GossipData();
-                    gossipObj.info = str;
-
-                    ByteArrayOutputStream outStream = new ByteArrayOutputStream();
-                    ObjectOutputStream outObj = new ObjectOutputStream(outStream);
-                    outObj.writeObject(gossipObj);
-                    byte[] data = outStream.toByteArray();
-                    DatagramPacket send = new DatagramPacket(data, data.length, IPAddress, node.port);
-                    dgSock.send(send);
-                    System.out.println("Datagram has been sent");
-                } catch(UnknownHostException uh){
-                    System.out.println("\n  Unknown Host \n");
-                    uh.printStackTrace();
-                }
-
             } while(true);
         } catch(IOException io) { io.printStackTrace();}
     }
+
+    public void Ping(Node node){
+        node.next.put("active", 0);
+        node.previous.put("active", 0);
+        NodeExists(node.next.get("port") ,node);
+        NodeExists(node.previous.get("port"),node);
+    }
+
+    private void NodeExists(int port, Node node){
+      GossipData goss = new GossipData();
+      goss.info = "Hello";
+      goss.number = port;
+      goss.from = node.port;
+      new GossipWorker(goss, node).start();
+// Will need to change this for the case where port ends in 0 and port ends with 9, but this is fine for now I guess
+        Timer timer = new Timer();
+        timer.schedule(new TimerTask() {
+        public void run(){
+            if(goss.number == node.previous.get("port")){
+                String response = (node.previous.get("active") == 1) ? "There is an active Node on port :" + port : "There is no active Node on port :" + port;
+                System.out.println(response);
+            } else if(goss.number == node.next.get("port")){
+                String response = (node.next.get("active") == 1) ? "There is an active Node on port :" + port : "There is no active Node on port :" +  port;
+                System.out.println(response);
+            }
+        }
+        }, 1000);
+    }
 }
-
-
 /* 
  * Comments:
  * ================================
