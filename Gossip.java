@@ -1,12 +1,13 @@
 import java.io.*;
 import java.net.*;
 import java.util.*;
-
+import java.time.*;
 
 
 
 
 class GossipData implements Serializable{
+    int MID;
     int number;
     int avg;
     int highVal;
@@ -15,6 +16,17 @@ class GossipData implements Serializable{
     int from;
     int id;
     int src;
+    int cycle;
+    LocalDateTime created;
+
+    public GossipData() {
+        this.MID = SetMesssageID();
+    }
+
+    public int SetMesssageID(){
+        Random r =  new Random();
+        return r.nextInt(90000) + 10000;
+    }
 }
 
 class GossipWorker extends Thread{
@@ -33,43 +45,71 @@ class GossipWorker extends Thread{
             SendPing(gossip, node.port);
         } else if(gossip.info.equals("Here") && node.issuedCmd.equals("p")){
             ReceivePing(gossip, node);
-        } else {
-            Sweep(gossip, node);
-        }
-    }
-
-    private void Sweep(GossipData gossip, Node node){
-        /* 
-         * This was originially in the HandleRandomization method, but was identified as reusable code for a "sweep"
-         * Can move later if needed
-         */
-        if(gossip.info.equals("ran")){
+        } else if(gossip.info.equals("ran")){
             HandleRandomization(gossip, node);
         } else if(gossip.info.equals("MinMax")){
             CheckMinMax(gossip, node);
+        } else if(gossip.info.equals("N")){
+            SetCycles(gossip, node);
         }
 
+        if(node.Seen.size() == 15)
+            node.Seen.clear();
+    }
+
+    private void SetCycles(GossipData gossip, Node node){
+        if(node.Seen.containsKey(gossip.MID))
+            return;
+        else
+            node.Seen.put(gossip.MID, LocalDateTime.now(ZoneOffset.UTC));
+
+        if(node.cycle != gossip.cycle)
+            node.cycle = gossip.cycle;
+
+        Update(gossip, node, node.next.get("port"));
+        Update(gossip, node, node.previous.get("port"));
+    }
+
+    private GossipData CreateGossipMessage(GossipData old, Node node){
+        GossipData newGossip = new GossipData();
+        newGossip = old;
+        newGossip.MID = newGossip.SetMesssageID(); //may not have to deal with this
+        newGossip.src = node.id;
+        newGossip.number = node.port;
+        newGossip.from = node.port;
+
+        return newGossip;
+    }
+
+    private void SetUpdateDirection(GossipData gossip, Node node, boolean isUpdated){
+
+        if(gossip.src == node.id && !(node.Seen.containsKey(gossip.MID))){ //add check so that it doesn't run twice. Maybe we set if it has seen the message after update?
+            Update(gossip, node, node.next.get("port"));
+            Update(gossip, node, node.previous.get("port"));
+            return;
+        }
+        //this is the general idea of what we are trying to accomplish here, will probably have to adjust
+        if(gossip.number < gossip.from){
+            Update(gossip, node, node.previous.get("port"));
+        } else if (gossip.number > gossip.from){
+            Update(gossip, node, node.next.get("port"));
+        }
+
+        //need edge case for corners
+    }
+    
+    private void Update(GossipData gossip, Node node, int target){
         try{
             DatagramSocket dgSock = new DatagramSocket();
             InetAddress IPAddress = InetAddress.getByName("localhost");
 
-            GossipData outData = new GossipData();
-            outData = gossip; 
-/*             outData.info = gossip.info;
-            outData.from = gossip.from; */
-            outData.id = node.id;
-/*             outData.src = gossip.src; */
-            if((gossip.from == node.previous.get("port")) || (gossip.number == node.previous.get("port" ) && gossip.src == node.id)){
-                outData.number = node.next.get("port");
-            } else if ((gossip.from == node.next.get("port")) || (gossip.number == node.next.get("port" ) && gossip.src == node.id)){
-                outData.number = node.previous.get("port");
-            }
-            System.out.println("\nTARGET PORT IS " + outData.number + "\n");
+            gossip.id = node.id;
+            gossip.number = target;
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             ObjectOutputStream outObj = new ObjectOutputStream(out);
             outObj.writeObject(gossip);
             byte[] data = out.toByteArray();
-            DatagramPacket send = new DatagramPacket(data, data.length, IPAddress, outData.number);
+            DatagramPacket send = new DatagramPacket(data, data.length, IPAddress, gossip.number);
             dgSock.send(send);
             dgSock.close();
             return;
@@ -78,34 +118,67 @@ class GossipWorker extends Thread{
         } 
     }
 
+    //adjust to fit our new method SetUpdateDirection
     private void CheckMinMax(GossipData gossip, Node node){
-        /* 
-         * I think each node needs to display the current min and max after each process?
-         * Need to read more into this one
-         */
-        if(gossip.lowVal > node.kMin)
-            gossip.lowVal = node.kMin;
-        else
-            node.kMin = gossip.lowVal;
+        //if our node is already updated, ignore .. May need to change how the part of returning home is
+        //idk if we are supposed to return home after updating all values?
+        if(node.Seen.containsKey(gossip.MID) && node.Seen.containsValue(gossip.info)){
+            if((gossip.lowVal == node.data || gossip.highVal == node.data) )
+                return;
+        } else {
+            node.Seen.put(gossip.MID, LocalDateTime.now(ZoneOffset.UTC));
+        }
+        boolean isUpdated = false;
 
-        if(gossip.highVal < node.kMax)
-            gossip.highVal = node.kMax;
-        else
+
+        //If randomization has happened in the process, we need to reset the local node's
+        //data just in case
+
+        if(gossip.lowVal == 0){
+            gossip.lowVal = node.data;
+            node.kMin =  gossip.lowVal;
+            isUpdated = true;
+        }
+        else if(gossip.highVal == 0){
+            gossip.highVal = node.data;
             node.kMax = gossip.highVal;
+            isUpdated = true;
+        }
+        else if(gossip.lowVal > node.data){
+            gossip.lowVal = node.data;
+            node.kMin = gossip.lowVal;
+            isUpdated = true;
+        }else if(gossip.highVal < node.data){
+            gossip.highVal = node.data;
+            node.kMax = gossip.highVal;
+            isUpdated = true;
+        }
 
-        System.out.println("\nNode" + node.id + ": current min = " + gossip.lowVal + "\nNode" + node.id + ": current max = " + gossip.highVal);
+        if(isUpdated){
+            System.out.println("\nNode" + node.id + ": current min = " + gossip.lowVal + 
+            "\nNode" + node.id + ": current max = " + gossip.highVal);
+            gossip.MID = gossip.SetMesssageID(); //if we encountered a full updated, then we need to prepare the packet to send in all directions
+            SetUpdateDirection(gossip, node, isUpdated);
+        }
     } 
 
     private void HandleRandomization(GossipData gossip, Node node){
-
-        //FROM is the source port, if this is the source port then we don't have to randomize
-         if(gossip.src == node.id && gossip.from != node.port)
+        
+        if(node.Seen.containsKey(gossip.MID) && node.Seen.containsValue(gossip.info))
             return;
-        int prevData = node.data;
-        node.data = node.SetData();
-
-        System.out.println("\nNode" + node.id + ": Previous data in Node = " + prevData);
-        System.out.println("Node" + node.id + ": Current data in Node = " + node.data + "\n");
+/*         else
+            node.Seen.put(gossip.MID, gossip.info); */
+        
+        if(gossip.src != node.id){
+            int prevData = node.data;
+            node.data = node.SetData();
+    
+            System.out.println("\nNode" + node.id + ": Previous data in Node = " + prevData);
+            System.out.println("Node" + node.id + ": Current data in Node = " + node.data +"\n");      
+        }
+        //update this so that we can choose a direction
+            Update(gossip, node, node.previous.get("port"));
+            Update(gossip, node, node.next.get("port"));    
     }
 
     private void ReceivePing(GossipData gossip, Node node){
@@ -121,7 +194,6 @@ class GossipWorker extends Thread{
     }
 
     private void SendPing(GossipData goss, int currentPort){
-
         try{
             DatagramSocket dgSock = new DatagramSocket();
             InetAddress IPAddress = InetAddress.getByName("localhost");
@@ -138,7 +210,6 @@ class GossipWorker extends Thread{
         } catch(IOException io){
             io.printStackTrace();
         }
-
     }
 
     private void ReturnPing(GossipData goss, Node node){
@@ -153,6 +224,7 @@ class GossipWorker extends Thread{
             gossipObj.from = node.port;
             gossipObj.number = goss.from;
             gossipObj.id = node.id;
+            gossipObj.created = LocalDateTime.now(ZoneOffset.UTC);
     
             ByteArrayOutputStream outStream = new ByteArrayOutputStream();
             ObjectOutputStream outObj = new ObjectOutputStream(outStream);
@@ -174,11 +246,12 @@ class Node {
     int data;
     int size;
     int avg;
-    int cycle;
+    int cycle = 20;
     int port;
     String issuedCmd;
     HashMap<String, Integer> next = new HashMap<>();
     HashMap<String, Integer> previous = new HashMap<>();
+    HashMap<Integer, LocalDateTime> Seen = new HashMap<>(); //may want to change the String to DateTime for the time of the message
     int kMin;
     int kMax;
 
@@ -193,6 +266,8 @@ class Node {
         this.previous.put("port", 0);
         this.previous.put("active", 0);
 
+        //In this exercies the neighboring ports are in order, the following is a simple
+        // calculation for all neighbors, including the edge ones that wrap around
         int nextPort = (this.port == 48109) ? this.port = 48100 : this.port +1;
         int prevPort = (this.port == 48100) ? this.port + 9 : this.port - 1;
 
@@ -211,6 +286,8 @@ class Node {
         System.out.println("'l': Prints local Node values");
         System.out.println("'p': 'Pings' neighboring ports to check for active nodes");
         System.out.println("'v': Generates new random values for all nodes in Network");
+        System.out.println("'m': Finds the minimum and maximum values in the network");
+        System.out.println("'N': Sets the total number of Cycles we can have in our [sub]network (default =  20)");
     }
 
     public void Locals(){
@@ -246,7 +323,6 @@ class Node {
         t.start();
         
          boolean control = true;
-
          try{
             DatagramSocket dgsock = new DatagramSocket(current.port);
             //Datagram sockets are great, but we may need to watch out for buffer size
@@ -272,6 +348,7 @@ class Node {
                     }
 
                     new GossipWorker(gObj, current).start();
+
                 } catch (ClassNotFoundException e){
                     e.printStackTrace();
                 }
@@ -320,11 +397,20 @@ class ConsoleLoop implements Runnable{
                         break;
                     case "v":
                         node.issuedCmd = "v";
+                        int prevData = node.data;
+                        node.data = node.SetData();
+                        System.out.println("\nNode" + node.id + ": Previous data in Node = " + prevData);
+                        System.out.println("Node" + node.id + ": Current data in Node = " + node.data + "\n"); 
                         StartGossip(node, "ran");
                         break;
                     case "m":
                         node.issuedCmd = "m";
                         StartGossip(node, "MinMax");
+                        break;
+                    case "N":
+                        node.issuedCmd = "N";
+                        GetInput(node, read);
+                        StartGossip(node, "N");
                         break;
                         
                 }
@@ -344,6 +430,7 @@ class ConsoleLoop implements Runnable{
       goss.info = "Hello";
       goss.number = port;
       goss.from = node.port;
+      goss.created = LocalDateTime.now(ZoneOffset.UTC);
       new GossipWorker(goss, node).start();
 // Will need to change this for the case where port ends in 0 and port ends with 9, but this is fine for now I guess
         Timer timer = new Timer();
@@ -360,40 +447,28 @@ class ConsoleLoop implements Runnable{
         }, 1000);
     }
 
-
+    private void GetInput(Node node, BufferedReader read){
+        try{
+            System.out.println("How many cycles would you like to have?");
+            String in = read.readLine();
+            node.cycle = Integer.parseInt(in);
+            System.out.println("Updating cycles to " + in + " cycles");
+        } catch(IOException e){
+            e.printStackTrace();
+        }
+    }
 
     private void StartGossip(Node node, String cmd){
 
-        GossipData gossNext = new GossipData();
-        GossipData gossPrev = new GossipData();
-        gossNext.number = node.next.get("port");
-        gossNext.from = node.port;
-        gossNext.src = node.id;
-        gossNext.info = cmd;
-
-        gossPrev.number = node.previous.get("port");
-        gossPrev.from = node.port;
-        gossPrev.src = node.id;
-        gossPrev.info = cmd;
-
-        if(cmd.equals("MinMax")){
-            SetCurrentMinMax(node, gossNext, gossPrev);
-        }
-
-        new GossipWorker(gossNext, node).start();
-        new GossipWorker(gossPrev, node).start();
-    }
-
-    private void SetCurrentMinMax(Node node, GossipData prev, GossipData next){
-        prev.highVal = node.data;
-        prev.lowVal = node.data;
-        next.highVal = node.data;
-        next.lowVal = node.data;
-
-        if(node.kMax == 0)
-            node.kMax = node.data;
-        if(node.kMin == 0)
-            node.kMin = node.data;
+        GossipData goss = new GossipData();
+        goss.number = node.next.get("port");
+        goss.from = node.port;
+        goss.src = node.id;
+        goss.info = cmd;
+        goss.cycle = node.cycle;
+        goss.created = LocalDateTime.now(ZoneOffset.UTC);
+        
+        new GossipWorker(goss, node).start();
     }
 }
 
@@ -410,7 +485,7 @@ class ConsoleLoop implements Runnable{
  /* 
   * TODO:
   * NETWORK WIDE UNLESS OTHERWISE SPECIFIED
-  *  - m: Print minimum and maximum values in network ALL NODES
+  *  - m: Print minimum and maximum values in network ALL NODES => GOOD
   *  - a: calculate the average of all the local values in the network HARD
   *  - z: calculate the average of the local values in the network HARD
   *  - d: delete the current node. fully stop the process, gracefully close the socket (see HostServer) LOCAL
@@ -418,8 +493,34 @@ class ConsoleLoop implements Runnable{
   *  - y: display the number of cycles since the beginning
   *  - n: set N as the max value of gossip messags for the network
 
+  NEED TO UPDATE CODE FOR JUST LOCAL CALLS
+
 
   Currently working on the MINMAX section, need to be able to send the values back to the root node as well
   additionally, need to remember to se the low val and the high vals when we randomize the data? I feel like if we randomize this should trigger a minmax situation
   -Maybe when we randomize we check to see if either value is less than or greater than respectively
+
+  Consider adding a "TYPE" variable to the GossipData object. The type could be req and res, after we send a req we need to send a res
+    - need to find a way to coordinate the "pings" accross the network. If the req returns null, what do we do? How can we tell?
+    - MAYBE what we need to do is set it up so that every time we make a request we send a response that just tells us we made it, if 
+        we don't make it, then it's time to turn around?
+
+    if type = req
+        return and don't do anything
+    else if type = res
+        go back to start and go back through the network? Need to see what he means by all nodes need to reply
+
+    1. initialize
+    2. local
+    3. update
+    4. propogate/update
+    5. convergance:
+
+What we want to try to do is have it so that our code runs in one direction when we are at the initial state
+then on update we backtrack, AND keep going
+since this works in a circle
+
+Need to add back in known max and known min on the nodes
+Maybe we don't base our data on them, but that is what we have to update
+
   */
