@@ -61,13 +61,12 @@ class GossipWorker extends Thread{
         if(node.Seen.containsKey(gossip.MID))
             return;
         else
-            node.Seen.put(gossip.MID, LocalDateTime.now(ZoneOffset.UTC));
+            node.Seen.put(gossip.MID, gossip.created);
 
         if(node.cycle != gossip.cycle)
             node.cycle = gossip.cycle;
 
-        Update(gossip, node, node.next.get("port"));
-        Update(gossip, node, node.previous.get("port"));
+        SetUpdateDirection(gossip, node, true);
     }
 
     private GossipData CreateGossipMessage(GossipData old, Node node){
@@ -84,18 +83,21 @@ class GossipWorker extends Thread{
     private void SetUpdateDirection(GossipData gossip, Node node, boolean isUpdated){
 
         if(gossip.src == node.id && !(node.Seen.containsKey(gossip.MID))){ //add check so that it doesn't run twice. Maybe we set if it has seen the message after update?
+            node.Seen.put(gossip.MID, gossip.created);
             Update(gossip, node, node.next.get("port"));
             Update(gossip, node, node.previous.get("port"));
             return;
         }
-        //this is the general idea of what we are trying to accomplish here, will probably have to adjust
-        if(gossip.number < gossip.from){
-            Update(gossip, node, node.previous.get("port"));
-        } else if (gossip.number > gossip.from){
-            Update(gossip, node, node.next.get("port"));
-        }
+        node.Seen.put(gossip.MID, gossip.created);
 
-        //need edge case for corners
+        //this is the general idea of what we are trying to accomplish here, will probably have to adjust
+        if(gossip.from == node.previous.get("port")){
+            Update(gossip, node, node.next.get("port"));
+            return;
+        } else if(gossip.from == node.next.get("port")){
+            Update(gossip, node, node.previous.get("port"));
+            return;
+        }
     }
     
     private void Update(GossipData gossip, Node node, int target){
@@ -122,7 +124,7 @@ class GossipWorker extends Thread{
     private void CheckMinMax(GossipData gossip, Node node){
         //if our node is already updated, ignore .. May need to change how the part of returning home is
         //idk if we are supposed to return home after updating all values?
-        if(node.Seen.containsKey(gossip.MID) && node.Seen.containsValue(gossip.info)){
+        if(node.Seen.containsKey(gossip.MID)){
             if((gossip.lowVal == node.data || gossip.highVal == node.data) )
                 return;
         } else {
@@ -164,10 +166,8 @@ class GossipWorker extends Thread{
 
     private void HandleRandomization(GossipData gossip, Node node){
         
-        if(node.Seen.containsKey(gossip.MID) && node.Seen.containsValue(gossip.info))
+        if(node.Seen.containsKey(gossip.MID))
             return;
-/*         else
-            node.Seen.put(gossip.MID, gossip.info); */
         
         if(gossip.src != node.id){
             int prevData = node.data;
@@ -177,8 +177,9 @@ class GossipWorker extends Thread{
             System.out.println("Node" + node.id + ": Current data in Node = " + node.data +"\n");      
         }
         //update this so that we can choose a direction
-            Update(gossip, node, node.previous.get("port"));
-            Update(gossip, node, node.next.get("port"));    
+/*             Update(gossip, node, node.previous.get("port"));
+            Update(gossip, node, node.next.get("port"));   */
+        SetUpdateDirection(gossip, node, true);
     }
 
     private void ReceivePing(GossipData gossip, Node node){
