@@ -55,7 +55,18 @@ class GossipWorker extends Thread{
         } else if(gossip.info.equals("d")){
             Update(gossip, node, node.port);
         } else if(gossip.info.equals("a")){
-            Average(gossip, node);
+            if(node.id == gossip.src)
+                Average(gossip, node);
+            else if(node.avg == 0){
+                gossip.avg = node.data;
+                
+                Update(gossip, node, node.previous.get("port"));
+            } else{
+                gossip.avg = node.avg;
+                
+                Update(gossip, node, node.previous.get("port"));
+            }
+
         } else if(gossip.info.equals("z")){
 
         } else if(gossip.info.equals("avg")){
@@ -81,21 +92,31 @@ class GossipWorker extends Thread{
 
     private void Average(GossipData gossip, Node node){
         
-        if((gossip.src == node.id) && node.avg == 0){ //if the source is the current node and the current average is 0 (our starting point)
+        if((gossip.src == node.id) && gossip.avg == 0){ //if the source is the current node and the current average is 0 (our starting point)
+            System.out.println("\ncalculating average in network\n");
             Update(gossip, node, node.next.get("port"));
+        } else{
+            System.out.println("\nCalculating average between " + gossip.avg + " and " + node.avg);
+            int average = Calc(gossip.avg, node.avg, node.data);
+            gossip.avg = average;
+            node.avg = average;
+            System.out.println("\naverage calculated: " + average);
+            //Update(gossip, node, node.next.get("port"));
+          // return;
         }
 
-        int average = Calc(gossip.avg, node.avg, node.data);
     }
 
     private int Calc(int gossip, int local, int data){
         int average = 0;
         if(local == 0){
+            System.out.println("\nCalculating average between " + gossip + " and " + data);
             average = gossip + data;
             //may need to have a check for both == 0
             average = average / 2;
             
         } else {
+            System.out.println("\nCalculating average between " + gossip + " and " + local);
             average = gossip + local;
             average = average / 2;
         }
